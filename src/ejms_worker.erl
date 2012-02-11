@@ -4,23 +4,20 @@
 
 -include("../include/ejms.hrl").
 
-% retrieve() ->
-    % void.
-retrieve(UID) ->
-    Pid = spawn_link(fun() -> retrieve1( UID) end),
+retrieve({JID, IdAndMailbox}) ->
+    Pid = spawn_link(fun() -> retrieve1(JID, IdAndMailbox) end),
     {ok, Pid}.
 
-retrieve1( UID ) ->
-    {ok, Account } = ejms_db:user(UID),
-    #ejms_account{ mailbox = Mailbox } = Account,
+retrieve1( JID, {MBID, Mailbox} ) ->
     {ok, NewHash} = getlasthash(Mailbox),
     io:format("succesful check~n"),
     if
         NewHash =/= Mailbox#ejms_mailbox.lasthash ->
             NewMailbox = Mailbox#ejms_mailbox{ lasthash = NewHash },
-            NewAccount = Account#ejms_account{ mailbox = NewMailbox },
-            ejms_db:write_user(NewAccount),
-            ejms:notify(UID),
+            ejms_db:update_mailbox(JID, MBID, NewMailbox),
+            % NewAccount = Account#ejms_account{ mailbox = NewMailbox },
+            % ejms_db:write_user(NewAccount),
+            ejms:notify(JID, MBID),
             newmail;
         true -> ok
     end.

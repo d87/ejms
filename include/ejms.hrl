@@ -13,7 +13,8 @@
 
 -record(ejms_account, {
     jid :: binary(),
-    mailbox = #ejms_mailbox{} :: #ejms_mailbox{},
+    mailboxes = [] :: list(),
+     % #ejms_mailbox{} :: #ejms_mailbox{},
     active = true :: boolean(),
     subscription_state = none :: none | to | from | both
 }).

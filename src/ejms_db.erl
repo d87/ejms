@@ -5,7 +5,7 @@
 
 -include("../include/ejms.hrl").
 
--export([start/0, user/1, write_user/1, delete_user/1, subscribers_list/0]).
+-export([start/0, user/1, write_user/1, delete_user/1, subscribers_list/0, update_mailbox/3, delete_mailbox/2]).
 
 -spec start() -> ok.
 start() ->
@@ -33,17 +33,40 @@ user(BareJID) ->
         [A] -> {ok, A};
         [] -> not_found
     end.
-    % Fun = fun() -> mnesia:read(ejms_account, BareJID) end,
-    % case mnesia:transaction(Fun) of
-        % {atomic, [A]} -> {ok, A};
-        % {atomic, []} -> not_found
-    % end.
 
 -spec write_user(A :: #ejms_account{}) -> ok .
 write_user(A) -> 
     Fun = fun() -> mnesia:write(A) end,
     {atomic, Res} = mnesia:transaction(Fun),
     Res.
+
+%%% @doc
+%%% Used to update mailboxes and also to register new accounts.
+%%% @end
+-spec update_mailbox(BareJID :: binary(), MBID :: binary(), NewMailbox :: #ejms_mailbox{}) -> ok .
+update_mailbox(BareJID, MBID, NewMailbox) -> 
+    Fun = fun() ->
+        A = case mnesia:read(ejms_account, BareJID) of
+                [Account] -> Account;
+                [] -> #ejms_account{ jid = BareJID, mailboxes = []}
+        end,
+        B = A#ejms_account{ mailboxes = lists:keystore(MBID, 1, A#ejms_account.mailboxes, {MBID, NewMailbox}) },
+        mnesia:write(B)
+    end,
+    {atomic, Res} = mnesia:transaction(Fun),
+    Res.
+
+-spec delete_mailbox(BareJID :: binary(), MBID :: binary()) -> ok | mailbox_not_found.
+delete_mailbox(BareJID, MBID) -> 
+    Fun = fun() ->
+        [A = #ejms_account{ mailboxes = Mailboxes}] = mnesia:read(ejms_account, BareJID),
+        case lists:keymember(MBID, 1, Mailboxes) of
+            true -> mnesia:write(A#ejms_account{ mailboxes = lists:keydelete(MBID, 1, Mailboxes) });
+            false -> mailbox_not_found
+        end
+    end,
+    {atomic, Res} = mnesia:transaction(Fun),
+    Res.    
 
 -spec delete_user(BareJID :: binary()) -> ok.
 delete_user(BareJID) -> 

@@ -18,13 +18,13 @@
 start_link(Module, Function, Args) ->
     ejms_pool_sup_sup:start_link(Module, Function, Args).
 
--spec push(User :: binary()) -> ok.
-push(User) ->
-    ejms_pool_srv:push(User).
+-spec push(Task :: binary()) -> ok.
+push(Task) ->
+    ejms_pool_srv:push(Task).
 
--spec enqueue(User :: binary()) -> started | enqueued.
-enqueue(User) ->
-    ejms_pool_srv:enqueue(User).
+-spec enqueue(Task :: binary()) -> started | enqueued.
+enqueue(Task) ->
+    ejms_pool_srv:enqueue(Task).
 
 -spec is_empty_queue() -> boolean().
 is_empty_queue() ->

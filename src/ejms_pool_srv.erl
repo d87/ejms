@@ -38,13 +38,13 @@ start_link() ->
 stop() ->
     gen_server:call(?MODULE, stop).
 
--spec push(User :: binary()) -> ok.
-push(User) ->
-    gen_server:call(?MODULE, {push, User}).
+-spec push(Task :: binary()) -> ok.
+push(Task) ->
+    gen_server:call(?MODULE, {push, Task}).
 
--spec enqueue(User :: binary()) -> started | enqueued.
-enqueue(User) ->
-    gen_server:call(?MODULE, {enqueue, User}).
+-spec enqueue(Task :: binary()) -> started | enqueued.
+enqueue(Task) ->
+    gen_server:call(?MODULE, {enqueue, Task}).
 
 -spec is_empty_queue() -> boolean().
 is_empty_queue() ->
@@ -69,18 +69,18 @@ init([])->
     {ok, #state{ queue = Q, slots = 3, wsup = Sup, halted = [] }}.
 
 -spec handle_call(any(), any(), #state{}) -> {reply, any(), #state{}} | {noreply, #state{}}.
-handle_call({enqueue, User}, _From, State = #state{ slots = N }) when N > 0 ->
-    run_worker(User),
+handle_call({enqueue, Task}, _From, State = #state{ slots = N }) when N > 0 ->
+    run_worker(Task),
     {reply, started, State#state{ slots = N-1 }};
-handle_call({enqueue, User}, _From, #state{ slots = N, queue = Q } = State) when N =< 0 ->
-    Q1 = queue:in(User, Q),
+handle_call({enqueue, Task}, _From, #state{ slots = N, queue = Q } = State) when N =< 0 ->
+    Q1 = queue:in(Task, Q),
     {reply, enqueued, State#state{ queue = Q1 }};
 
-handle_call({push, User}, _From, State = #state{ slots = N }) when N > 0 ->
-    run_worker(User),
+handle_call({push, Task}, _From, State = #state{ slots = N }) when N > 0 ->
+    run_worker(Task),
     {reply, ok, State#state{ slots = N-1 }};
-handle_call({push, User}, _From, #state{ slots = N, queue = Q } = State) when N =< 0 ->
-    Q1 = queue:in_r(User, Q),
+handle_call({push, Task}, _From, #state{ slots = N, queue = Q } = State) when N =< 0 ->
+    Q1 = queue:in_r(Task, Q),
     {reply, ok, State#state{ queue = Q1 }};
 
 handle_call(is_empty_queue, _From, State = #state{ queue = Q }) ->
@@ -105,8 +105,8 @@ handle_cast(_Msg, State) ->
 -spec handle_info(any(), #state{}) -> {noreply, #state{}}.
 handle_info({'DOWN', _Ref, process, _Pid, _}, #state{ slots = N, queue = Q, halted = HList} = State) ->
     case queue:out(Q) of
-        {{value, User}, Q1} ->
-            run_worker(User),
+        {{value, Task}, Q1} ->
+            run_worker(Task),
             {noreply, State#state{ queue = Q1 }};
         {empty, Q1} ->
             lists:foreach(fun(From) -> gen_server:reply(From, ok) end, HList),
@@ -128,6 +128,6 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-run_worker(User) ->
-    {ok, Pid} = supervisor:start_child(ejms_pool_sup, [User]),
+run_worker(Task) ->
+    {ok, Pid} = supervisor:start_child(ejms_pool_sup, [Task]),
     _Ref = erlang:monitor(process, Pid).

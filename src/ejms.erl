@@ -76,9 +76,9 @@ users() ->
 % add_resource(JID, Priority) ->
     % gen_server:call(?MODULE, {add_resource, JID, Priority}).
 
--spec notify(BareJID :: binary()) -> ok.
-notify(BareJID) ->
-    gen_server:call(?MODULE, {notify, BareJID}).
+-spec notify(BareJID :: binary(), MBID :: binary()) -> ok.
+notify(BareJID, MBID) ->
+    gen_server:call(?MODULE, {notify, BareJID, MBID}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -110,7 +110,9 @@ init([])->
 -spec handle_call(any(), any(), #state{}) -> {reply, any(), #state{}} | {noreply, #state{}}.
 handle_call({user_available, BareJID}, _From, #state{ users = Users} = State) ->
     Users2 = gb_sets:add_element(BareJID, Users),
-    ejms_pool:push(BareJID),
+    {ok, A} = ejms_db:user(BareJID),
+    lists:foreach(fun(Pair) -> ejms_pool:push({BareJID, Pair}) end, A#ejms_account.mailboxes),
+    % ejms_pool:push(BareJID),
     {reply, ok, State#state{ users = Users2 }};
 handle_call({user_unavailable, BareJID}, _From, #state{ users = Users} = State) ->
     Users2 = gb_sets:del_element(BareJID, Users),
@@ -129,8 +131,9 @@ handle_call(getusers, _From, #state{ users = Users} = State) ->
     % end,
     % {reply, ok, State#state{ workers = Workers2 }};
 
-handle_call({notify, BareJID}, _From, #state{ session = Session } = State) ->
-    Body = <<"New mail!">>,
+handle_call({notify, BareJID, MBID}, _From, #state{ session = Session } = State) ->
+    IOList = io_lib:format("New mail on ~s", [MBID]),
+    Body = list_to_binary(IOList),
 
     %%% Here I learned that less than zero priority for resources was very bad idea.
     % TopResource = case dict:find(BareJID, Workers) of
@@ -214,7 +217,10 @@ timer_loop( Time ) ->
     end,
     ejms_pool:wait_for_queue(),
     Users = users(),
-    gb_sets:fold(fun(JID, _Acc) -> ejms_pool:enqueue(JID) end, void, Users),
+    gb_sets:fold(fun(JID, _Acc) ->
+                    {ok, A} = ejms_db:user(JID),
+                    lists:foreach(fun(Pair) -> ejms_pool:enqueue({JID, Pair}) end, A#ejms_account.mailboxes)
+                 end, void, Users),
     timer_loop(Time).
 
 broadcast_presence(Session) ->
@@ -237,10 +243,91 @@ broadcast_presence_unavailable(Session) ->
 %%=================================================
 %% Message
 %%=================================================
+make_mailbox(MBID, U, P, Host, Port, SSL) when byte_size(MBID) < 30, byte_size(U) < 50, byte_size(P) < 30,
+                                               byte_size(Host) < 100, byte_size(Port) < 6, byte_size(SSL) < 6 ->
+    SSLStatus = case SSL of
+        <<"SSL">> -> true;
+        <<"NOSSL">> -> false;
+        _ -> error
+    end,
+    case SSLStatus of
+        error -> error;
+        _ ->
+            {MBID, #ejms_mailbox{ username = U, password = P, host = Host,
+                    port = list_to_integer(binary_to_list(Port)), ssl = SSLStatus }}
+    end;
+make_mailbox(_MBID, _U, _P, _Host, _Port, _SSL) -> error.
+
+
+-spec command(JID :: binary(), Bin :: binary()) -> binary().
+command(BareJID, Bin) ->
+    R = command1(BareJID, Bin),
+    if 
+        is_list(R) -> list_to_binary(R);
+        true -> R
+    end.
+
+command1(BareJID, <<"maillist",_Rest/binary>>) ->
+    {ok, A} = ejms_db:user(BareJID),
+    lists:reverse(
+        lists:foldl(
+            fun({MBID, #ejms_mailbox{ username = U, password = P, host = Host, port = Port, ssl = SSLFlag}}, Acc) ->
+                SSLStatus = case SSLFlag of true -> "yes"; false -> "no" end,
+                [io_lib:format("=== ~s ===\nUsername: ~s\nPassword: ~s\nHost: ~s\nPort: ~B\nSSL: ~s\n",[MBID, U, P, Host, Port, SSLStatus])|Acc]
+            end,
+            ["Registered mailboxes:\n"], A#ejms_account.mailboxes));
+command1(BareJID, <<"mailadd",Rest/binary>>) ->
+    case Rest of
+        <<>> -> <<"Format: mailadd <mailbox name> <username> <password> <host> <port> [SSL/NOSSL]">>;
+        _Any ->
+            R = case re:split(Rest, " +", [{return, binary}]) of
+                [<<>>, MBID, U, P, Host, Port, SSL] ->
+                    make_mailbox(MBID, U, P, Host, Port, SSL);
+                        
+                % [<<>>, MBID, U, P, Host, Port] ->
+                    % {MBID, #ejms_mailbox{ username = U, password = P, host = Host,
+                        % port = list_to_integer(binary_to_list(Port)), ssl = false }}
+                _Other -> error
+            end,
+            case R of
+                {Name, Mailbox} ->
+                    case ejms_worker:validate(Mailbox) of
+                        ok ->
+                            ok = ejms_db:update_mailbox(BareJID, Name, Mailbox),
+                            <<"New mailbox registered.">>;
+                        {error, badconn} ->
+                            io_lib:format("Error: Couldn't connect to ~s:~B",
+                                        [Mailbox#ejms_mailbox.host, Mailbox#ejms_mailbox.port]);
+                        {error, badauth} ->
+                            <<"Error: Couldn't authenticate.">>
+                    end;
+                error ->
+                    <<"Error: Incorrect/incomplete data.">>
+            end
+    end;
+
+command1(BareJID, <<"maildel",Rest/binary>>) ->
+    case Rest of
+        <<>> -> <<"Format: maildel <mailbox name>">>;
+        _Any ->
+            case re:split(Rest, " +", [{return, binary}]) of
+                [<<>>, MBID] ->
+                    case ejms_db:delete_mailbox(BareJID, MBID) of
+                        ok -> io_lib:format("~s succesfully removed.",[MBID]);
+                        mailbox_not_found -> io_lib:format("~s does not exist.",[MBID])
+                    end;
+                _Other ->
+                    <<"Error: mailbox name missing.">>
+            end
+    end;
+
+command1(_BareJID, Any) ->
+    Any.
 
 handle_message(Session, Message) ->
     From = exmpp_jid:parse(exmpp_stanza:get_sender(Message)),
-    Body = exmpp_message:get_body(Message),
+    BareJID = getbarebin(Message),
+    ResponseBody = command(BareJID, exmpp_message:get_body(Message)),
     % Response =  exmpp_xml:element(?NS_COMPONENT_ACCEPT, 'message',
                     % [?XMLATTR(<<"type">>, <<"chat">>),
                      % ?XMLATTR(<<"from">>, ?COMPONENT),
@@ -248,7 +335,7 @@ handle_message(Session, Message) ->
                         % [?XMLEL4(?NS_COMPONENT_ACCEPT, 'body', [], [?XMLCDATA(Body)])]),
     Response =  exmpp_stanza:set_sender(
                     exmpp_stanza:set_recipient(
-                        exmpp_message:chat(Body),
+                        exmpp_message:chat(ResponseBody),
                         exmpp_jid:to_binary(From)),
                     ?COMPONENT),
     % Response = exmpp_message:set_body(
@@ -278,16 +365,16 @@ handle_iq(Session, "get", ?NS_INBAND_REGISTER, IQ) ->
     %% exmpp_stanza:get_sender extracts binary with full jid string, exmpp_jid:parse converts it into jid record
     BareJID = getbarebin(IQ),
 
-    Mailbox = case ejms_db:user(BareJID) of
-        {ok, #ejms_account{ mailbox = Existing }} -> Existing;
-        not_found -> #ejms_mailbox{}
+    {Name, Mailbox} = case ejms_db:user(BareJID) of
+        {ok, A} ->
+            [H|_T] = A#ejms_account.mailboxes,
+            H;
+        not_found -> {<<"Mailbox1">>, #ejms_mailbox{}}
     end,
-    Form = make_form(<<"Fill in your mail account credentials">>, Mailbox),
+    Form = make_form(<<"Fill in your mail account credentials">>, Name, Mailbox),
     FormInstructions = exmpp_xml:element(?NS_INBAND_REGISTER, 'instructions', [],
                         [?XMLCDATA(<<"FormInstructions">>)]),
-    
-    
-    
+ 
     Result = exmpp_iq:result(IQ, exmpp_xml:element(?NS_INBAND_REGISTER, 'query', [], 
         [FormInstructions, Form])),
     send_packet(Session, Result);
@@ -296,12 +383,9 @@ handle_iq(Session, "set", ?NS_INBAND_REGISTER, IQ) ->
     From = exmpp_jid:parse(exmpp_stanza:get_sender(IQ)),
     BareJID = exmpp_jid:prep_bare_to_binary(From),
     Form = exmpp_xml:get_element(exmpp_iq:get_payload(IQ), ?NS_DATA_FORMS, 'x'),
-    Mailbox = parse_form(Form),
-    Account = case ejms_db:user(BareJID) of
-        {ok, A} -> A#ejms_account{ mailbox = Mailbox };
-        not_found -> #ejms_account{ jid = BareJID, mailbox = Mailbox }
-    end,
-    ok = ejms_db:write_user(Account),
+    {Name, Mailbox} = parse_form(Form),
+    %% will create account if it's not already present
+    ok = ejms_db:update_mailbox(BareJID, Name, Mailbox),
 
     Result = exmpp_iq:result(IQ),
 
@@ -502,11 +586,12 @@ gen_form_opts(Value, required) ->
     [ required | gen_form_opts(Value)];
 gen_form_opts(Value, _) -> gen_form_opts(Value).
 
-make_form(Instructions, #ejms_mailbox{ username = Username, password = Password, host = Host, port = Port, ssl = SSL } = _Mailbox) ->
+make_form(Instructions, MBID, #ejms_mailbox{ username = Username, password = Password, host = Host, port = Port, ssl = SSL } = _Mailbox) ->
 
     InstructionElement = exmpp_xml:element(?NS_DATA_FORMS, 'instructions', [], [?XMLCDATA(Instructions)]),  
 
     FormTypeField = create_field(<<"hidden">>, <<"FORM_TYPE">>, void, [{value, <<"jabber:iq:register">> }]),
+    MailboxNameField = create_field(<<"text-single">>, <<"mailbox-id">>, <<"Mailbox Name">>, gen_form_opts(MBID, required)),
     UsernameField = create_field(<<"text-single">>, <<"username">>, <<"Username">>, gen_form_opts(Username, required)),
     PasswordField = create_field(<<"text-private">>, <<"password">>, <<"Password">>, gen_form_opts(Password, required)),
     ServerField = create_field(<<"text-single">>, <<"host">>, <<"POP3 Server">>, gen_form_opts(Host, required)),
@@ -515,30 +600,39 @@ make_form(Instructions, #ejms_mailbox{ username = Username, password = Password,
     % ServerPortField = create_field(<<"text-single">>, <<"mailserver">>, <<"Mail server">>, [required]),
 
     exmpp_xml:element(?NS_DATA_FORMS, 'x', [?XMLATTR(<<"type">>,<<"form">>)], 
-                    [InstructionElement, FormTypeField, UsernameField, PasswordField, ServerField, ServerPortField, SSLField ]).
+                    [InstructionElement, FormTypeField, MailboxNameField, UsernameField, PasswordField, ServerField, ServerPortField, SSLField ]).
 
 
 
-% -spec parse_form(#xmlel{}) -> #user_conf{}.
+-spec parse_form(#xmlel{}) -> tuple().
 parse_form(Form) ->
     Fields = exmpp_xml:get_elements(Form,  ?NS_DATA_FORMS, 'field'),
     Pairs = lists:map(fun(Field) ->
                     {exmpp_xml:get_attribute_as_binary(Field, <<"var">>, <<>>),
                     exmpp_xml:get_cdata(exmpp_xml:get_element(Field, 'value'))}
                 end, Fields),
-    lists:foldl(fun ({<<"username">>, Value}, Mailbox) ->
-                        Mailbox#ejms_mailbox{username = Value};
-                    ({<<"password">>, Value}, Mailbox) ->
-                        Mailbox#ejms_mailbox{password = Value};
-                    ({<<"host">>, Value}, Mailbox) ->
-                        Mailbox#ejms_mailbox{host = Value};
-                    ({<<"port">>, Value}, Mailbox) ->
+    lists:foldl(fun ({<<"mailbox-id">>, Value}, {_MBID, Mailbox}) ->
+                        {Value, Mailbox};
+
+                    ({<<"username">>, Value}, {MBID, Mailbox}) ->
+                        {MBID, Mailbox#ejms_mailbox{username = Value}};
+
+                    ({<<"password">>, Value}, {MBID, Mailbox}) ->
+                        {MBID, Mailbox#ejms_mailbox{password = Value}};
+
+                    ({<<"host">>, Value}, {MBID, Mailbox}) ->
+                        {MBID, Mailbox#ejms_mailbox{host = Value}};
+
+                    ({<<"port">>, Value}, {MBID, Mailbox}) ->
                         V1 = list_to_integer(binary_to_list(Value)),
-                        Mailbox#ejms_mailbox{port = V1};
-                    ({<<"ssl_checkbox">>, Value}, Mailbox) ->
-                        Mailbox#ejms_mailbox{ssl = form_to_boolean(Value)};
+                        {MBID, Mailbox#ejms_mailbox{port = V1}};
+
+                    ({<<"ssl_checkbox">>, Value}, {MBID, Mailbox}) ->
+                        {MBID, Mailbox#ejms_mailbox{ssl = form_to_boolean(Value)}};
+
                     % ({<<"FORM_TYPE">>, <<"jabber:iq:register">>}, Mailbox) ->
                         % Mailbox;
-                    ({_, _Value}, Mailbox) ->
-                        Mailbox
-                end, #ejms_mailbox{}, Pairs).
+
+                    ({_, _Value}, {MBID, Mailbox}) ->
+                        {MBID, Mailbox}
+                end, {<<>>, #ejms_mailbox{}}, Pairs).
