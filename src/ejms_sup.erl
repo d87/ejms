@@ -35,8 +35,8 @@ init([]) ->
 
     SupFlags = {RestartStrategy, MaxRestarts, MaxSecondsBetweenRestarts},
 
-    EJMS = {'ejms', {'ejms', start_link, []},
-          permanent, 15000, worker, ['ejms']},
+    EJMS = {'ejms_srv', {'ejms_srv', start_link, []},
+          permanent, 15000, worker, ['ejms_srv']},
 
     {ok, {SupFlags, [EJMS]}}.
 

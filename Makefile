@@ -1,6 +1,7 @@
 ERL = erl -boot start_clean 
 
 MODS=ejms \
+	ejms_srv \
 	ejms_sup \
 	ejms_worker \
 	ejms_db \

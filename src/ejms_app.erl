@@ -31,6 +31,13 @@
 %% @end
 %%--------------------------------------------------------------------
 start(_StartType, _StartArgs) ->
+    application:start(crypto),
+    application:start(public_key),
+    application:start(ssl),
+    % exmpp:start(),
+    application:start(exmpp),
+    % crypto,public_key,ssl,
+    ejms_db:start(),
     {ok, Pid} = ejms_sup:start_link().
 
 %%--------------------------------------------------------------------

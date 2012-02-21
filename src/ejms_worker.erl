@@ -17,7 +17,7 @@ retrieve1( JID, {MBID, Mailbox} ) ->
             ejms_db:update_mailbox(JID, MBID, NewMailbox),
             % NewAccount = Account#ejms_account{ mailbox = NewMailbox },
             % ejms_db:write_user(NewAccount),
-            ejms:notify(JID, MBID),
+            ejms_srv:notify(JID, MBID),
             newmail;
         true -> ok
     end.
