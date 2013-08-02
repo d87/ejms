@@ -31,6 +31,7 @@
 %% @end
 %%--------------------------------------------------------------------
 start(_StartType, _StartArgs) ->
+    io:format("~p~n",[_StartArgs]),
     application:start(crypto),
     application:start(public_key),
     application:start(ssl),

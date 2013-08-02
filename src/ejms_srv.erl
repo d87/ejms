@@ -29,8 +29,8 @@
 -define(SERVER, ?MODULE).
 
 
--define(COMPONENT, "component.d87.cc").
--define(COMPONENT_NICK, "Supa service").
+-define(COMPONENT, "mailsrv.d87.cc").
+-define(COMPONENT_NICK, "Mail Notification Service").
 -define(SERVER_HOST, "localhost").
 -define(SERVER_PORT, 8888).
 -define(SECRET, "mizuage").
@@ -94,8 +94,7 @@ init([])->
     spawn_link(fun() -> timer_loop( 3600000 ) end),
     % spawn_link(fun() ->
         % mailport:start_link(),
-        % mailnotify_loop()
-    % end),
+        % mailnotify_loop()    % end),
 
     %% broadcast available presence to all subscribed users
     spawn(fun() -> broadcast_presence(Session) end),
@@ -475,7 +474,7 @@ handle_presence(_Session, "unavailable", Presence) ->
 
 handle_presence(_Session, "available", Presence) ->
     From = getbarebin(Presence),
-    io:format("~p available~n",[From]),
+    io:format("~p available~n",[From]), 
     user_available(From);
     % JID = exmpp_jid:parse(exmpp_stanza:get_sender(Presence)),
     % Childs = exmpp_xml:get_child_elements(Presence),

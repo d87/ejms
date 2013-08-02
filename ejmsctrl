@@ -1,0 +1,85 @@
+#!/bin/sh
+
+# parse command line parameters
+ARGS=
+while [ $# -ne 0 ] ; do
+    PARAM=$1
+    shift
+    case $PARAM in
+        --) break ;;
+        --node) ERLANG_NODE_ARG=$1; shift ;;
+        --config-dir) ETCDIR=$1 ; shift ;;
+        --config) EJABBERD_CONFIG_PATH=$1 ; shift ;;
+        --ctl-config) EJABBERDCTL_CONFIG_PATH=$1 ; shift ;;
+        --logs) LOGS_DIR=$1 ; shift ;;
+        --spool) SPOOLDIR=$1 ; shift ;;
+        *) ARGS="$ARGS $PARAM" ;;
+    esac
+done
+
+
+NODE=ejms
+HOST=localhost
+ERLANG_NODE=$NODE@$HOST
+ERL=/usr/bin/erl
+INSTALLUSER=jabber
+NAME=-name
+
+if [ "$EJMSDIR" = "" ]; then
+    # EJMSDIR="/usr/lib/erlang/lib/ejms-1.0"
+    EJMSDIR="/mnt/dev/ejms/"
+fi
+if [ "$EJMSBIN" = "" ]; then
+    EJMSEBIN="${EJMSDIR}/ebin/"
+fi
+if [ "$SPOOLDIR" = "" ]; then
+    SPOOLDIR="/var/db/mnesia/"
+fi
+
+ERL_PROCESSES=250000
+SMP=auto
+POLL=true
+ERLANG_OPTS="+K $POLL -smp $SMP +P $ERL_PROCESSES"
+
+start ()
+{
+    sh -c "$ERL \
+      $NAME $ERLANG_NODE \
+      -noinput -detached \
+      -pa $EJMSEBIN \
+      -mnesia dir \"\\\"$SPOOLDIR\\\"\" \
+      -s ejms \
+      $ERLANG_OPTS $ARGS \"$@\""
+# -sasl sasl_error_logger \\{file,\\\"$SASL_LOG_PATH\\\"\\} \
+}
+
+live ()
+{
+    sh -c "$ERL \
+      $NAME $ERLANG_NODE \
+      -pa $EJMSEBIN \
+      -mnesia dir \"\\\"$SPOOLDIR\\\"\" \
+      -s ejms \
+      $ERLANG_OPTS $ARGS \"$@\""
+# 
+# -sasl sasl_error_logger \\{file,\\\"$SASL_LOG_PATH\\\"\\} \
+}
+
+stop ()
+{
+    sh -c "$ERL \
+      $NAME $ERLANG_NODE \
+      -pa $EJMSEBIN \
+      -s ejms stop \
+      $ERLANG_OPTS $ARGS \"$@\""
+# -sasl sasl_error_logger \\{file,\\\"$SASL_LOG_PATH\\\"\\} \
+}
+
+case $ARGS in                                                                   
+    ' start') start;;                                                           
+    ' debug') debug;;                                                           
+    ' live') live;;                                                             
+    ' started') wait_for_status 0 30 2;; # wait 30x2s before timeout            
+    ' stopped') wait_for_status 3 15 2; stop_epmd;; # wait 15x2s before timeout 
+    *) ctl $ARGS;;                                                              
+esac
